@@ -13,11 +13,11 @@ def rd(f,d):
     except Exception:return d
 def wr(f,o):json.dump(o,open(f,'w',encoding='utf8'),ensure_ascii=False,separators=(',',':'))
 def get(u,h=None):
-    err=None
+    err=None;hdr={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36','Accept':'application/json, text/plain, */*','Accept-Language':'en-US,en;q=0.9','Referer':'https://www.espn.com/','Origin':'https://www.espn.com',**(h or {})}
     for _ in range(2):
         try:
-            r=U.urlopen(U.Request(u,headers={'User-Agent':'Mozilla/5.0',**(h or {})}),timeout=45);return json.loads(r.read()),r.headers
-        except Exception as e:err=e;time.sleep(1.5)
+            r=U.urlopen(U.Request(u,headers=hdr),timeout=20);return json.loads(r.read()),r.headers
+        except Exception as e:err=e;time.sleep(1.2)
     raise err
 def pdt(s):return dt.datetime.fromisoformat(s.replace('Z','+00:00'))
 def nm(s):return re.sub(r'\b(fc|cf|sc|cd|club|deportivo|atletico|atl)\b','',re.sub(r'[^a-z0-9 ]','',unicodedata.normalize('NFKD',s.lower()).encode('ascii','ignore').decode())).strip()
@@ -153,13 +153,32 @@ def parse(e,slug):
         return dict(n=x['team'].get('displayName','?'),sc=sc,form=x.get('form','') or '',rec=[w,d,l],sh=sh,sot=so,co=co)
     o=next((x for x in (c.get('odds') or []) if x),None)
     return dict(id=slug.replace('.','_')+'_'+str(e['id']),slug=slug,dt=e['date'],st=c['status']['type']['state'],clk=c['status'].get('displayClock',''),v=(c.get('venue') or {}).get('fullName',''),h=side(H),a=side(A),mk3=mk3(o) if o else None)
-def espn(slug,a,b):
-    return get(f'https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard?dates={a:%Y%m%d}-{b:%Y%m%d}&limit=1000')[0].get('events',[])
-def fetch(a,b):
-    def one(x):
-        try:return x[1],[p for p in (parse(e,x[1]) for e in espn(x[1],a,b)) if p]
-        except Exception:return x[1],None
-    with ThreadPoolExecutor(10) as ex:return dict(ex.map(one,LG))
+def espn(slug,day):
+    return get(f'https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard?dates={day:%Y%m%d}')[0].get('events',[])
+def drange(a,b):return [a+D(i) for i in range((b-a).days+1)]
+def fetch(days):
+    err=[];slugs=[x[1] for x in LG]
+    def one(args):
+        slug,day=args
+        try:evs=espn(slug,day)
+        except Exception as e:
+            if len(err)<6:err.append(f'{slug}@{day}: {type(e).__name__} {str(e)[:110]}')
+            return slug,None
+        out=[]
+        for ev in evs:
+            try:
+                p=parse(ev,slug)
+                if p:out.append(p)
+            except Exception as e:
+                if len(err)<6:err.append(f'{slug} parse: {type(e).__name__} {str(e)[:110]}')
+        return slug,out
+    pairs=[(s,d) for s in slugs for d in days]
+    with ThreadPoolExecutor(16) as ex:res=list(ex.map(one,pairs))
+    merged={s:None for s in slugs}
+    for slug,v in res:
+        if v is None:continue
+        merged[slug]=(merged[slug] or [])+v
+    return merged,err
 
 # ---------- Historial y ratings ----------
 def acc(evs):
@@ -359,10 +378,12 @@ def main():
     st=rd('state.json',{});[st.setdefault(k,{}) for k in('af','pl')]
     hist=rd('hist.json',{})
     if not hist.get('ts') or(NOW-pdt(hist['ts'])).total_seconds()>20*3600:
-        Hh=fetch(TODAY-D(100),TODAY-D(1));hist={'ts':NOW.isoformat(timespec='minutes'),'L':{s:acc(v) for s,v in Hh.items() if v}}
+        Hh,herr=fetch(drange(TODAY-D(30),TODAY-D(1)));hist={'ts':NOW.isoformat(timespec='minutes'),'L':{s:acc(v) for s,v in Hh.items() if v}}
         log('Historial reconstruido:',len(hist['L']),'competiciones con resultados');wr('hist.json',hist)
-    HL=hist.get('L',{});Ue=fetch(TODAY-D(1),TODAY+D(4))
+        if herr:log('Ejemplo de error (historial):',' | '.join(herr))
+    HL=hist.get('L',{});Ue,uerr=fetch(drange(TODAY-D(1),TODAY+D(4)))
     bad=[s for s,v in Ue.items() if v is None];log('ESPN:',len(Ue)-len(bad),'competiciones respondieron,',len(bad),'sin respuesta')
+    if uerr:log('Ejemplo de error (partidos):',' | '.join(uerr))
     ms=[]
     for r,s,n in LG:
         for m in Ue.get(s) or[]:m['rg'],m['lg']=r,n;ms.append(m)
