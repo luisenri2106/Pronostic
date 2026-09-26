@@ -38,18 +38,27 @@ def seasonf(lid):return (TODAY.year if TODAY.month>=7 else TODAY.year-1) if lid 
 LGAVG={'sh':12.5,'sot':4.3,'co':5.0}  # promedios de liga (estimación) para remates/tiros al arco/córners
 
 # ---------- API-Football ----------
-_last=[0.0]
+# Hay dos canales según dónde se sacó la clave: directo en api-football.com (header x-apisports-key)
+# o a través de RapidAPI (otra URL, header x-rapidapi-key + x-rapidapi-host). Se detecta solo con el primer intento.
+_last=[0.0];CHANNEL=['direct']
 def af(path,**q):
     if not AF['ok']:return None
     wait=6.5-(time.time()-_last[0])
     if wait>0:time.sleep(wait)
     _last[0]=time.time()
-    try:j,h=get('https://v3.football.api-sports.io/'+path+'?'+P.urlencode(q),{'x-apisports-key':KEY})
+    if CHANNEL[0]=='direct':
+        url='https://v3.football.api-sports.io/'+path+'?'+P.urlencode(q);hdr={'x-apisports-key':KEY}
+    else:
+        url='https://api-football-v1.p.rapidapi.com/v3/'+path+'?'+P.urlencode(q);hdr={'x-rapidapi-key':KEY,'x-rapidapi-host':'v3.football.api-sports.io'}
+    try:j,h=get(url,hdr)
     except Exception as e:
         AF['err']=f'{type(e).__name__} {str(e)[:130]}';AF['fail']=AF.get('fail',0)+1
         if AF['fail']>=4:AF['ok']=False;AF['err']+=' (4 fallos seguidos: probable bloqueo, se detiene por hoy)'
         return None
-    AF['fail']=0;AF['n']+=1;AF['rem']=h.get('x-ratelimit-requests-remaining')
+    AF['fail']=0
+    if isinstance(j,dict) and isinstance(j.get('errors'),dict) and 'token' in j['errors'] and CHANNEL[0]=='direct':
+        CHANNEL[0]='rapidapi';log('La clave no es del canal directo; cambiando a canal RapidAPI.');return af(path,**q)
+    AF['n']+=1;AF['rem']=h.get('x-ratelimit-requests-remaining')
     if isinstance(j,dict) and j.get('errors'):
         er=j['errors'];AF['err']=('; '.join(map(str,er)) if isinstance(er,list) else json.dumps(er,ensure_ascii=False))[:170]
         if er:return None
@@ -266,11 +275,15 @@ def maybe_enrich(cand,M,st):
 
 def main():
     st=rd('state.json',{});[st.setdefault(k,{}) for k in('enr','pl')]
+    CHANNEL[0]=st.get('channel','direct')
     hist=rd('hist.json',{});HL=hist.get('L',{})
     M={}
     for e in (rd('data.json',{}) or{}).get('matches',[]):
         fid=e.get('fid')
-        if fid:M[fid]=e
+        if fid and 'lg_id' in e:
+            M[fid]=dict(fid=fid,dt=e['dt'],st=e['st'],clk=e.get('clk'),v=e.get('v',''),
+                        h=dict(n=e['h'],sc=e.get('hg',0)),a=dict(n=e['a'],sc=e.get('ag',0)),
+                        lg=e['lg'],rg=e['rg'],lg_id=e['lg_id'])
     stale=not hist.get('ts') or(NOW-pdt(hist['ts'])).total_seconds()>20*3600
     errs=[]
     if stale:
@@ -314,11 +327,12 @@ def main():
     out=[]
     for fid,m in M.items():
         if 'lg_id' not in m:continue
-        e={'id':f'af_{fid}','fid':fid,'lg':m['lg'],'rg':m['rg'],'dt':m['dt'],'st':m['st'],'clk':m.get('clk'),'h':m['h']['n'],'a':m['a']['n'],'hg':m['h']['sc'],'ag':m['a']['sc'],'v':m.get('v','')}
+        e={'id':f'af_{fid}','fid':fid,'lg':m['lg'],'rg':m['rg'],'lg_id':m['lg_id'],'dt':m['dt'],'st':m['st'],'clk':m.get('clk'),'h':m['h']['n'],'a':m['a']['n'],'hg':m['h']['sc'],'ag':m['a']['sc'],'v':m.get('v','')}
         if fid in B:e.update(B[fid]['out'])
         out.append(e)
     st['pl']={k:v for k,v in st['pl'].items() if k.endswith(str(TODAY))}
     st['enr']={k:v for k,v in st['enr'].items() if int(k) in M}
+    st['channel']=CHANNEL[0]
     wr('state.json',st)
     wr('data.json',{'updated':NOW.isoformat(timespec='minutes'),'meta':{'competiciones':len(LEAGUES),'con_datos':len(HL),'af':{'ok':AF['ok'],'err':AF['err'],'rem':AF['rem'],'n':AF['n']},'log':LOG[-12:]},'picks':[f'af_{i}' for i in picks],'matches':out})
     log('Listo:',len(out),'partidos,',len(picks),'picks')
