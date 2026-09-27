@@ -47,14 +47,14 @@ def _url(path,q):
 def af(path,**q):
     if not AF['ok']:return None
     j=h=None
-    for _ in range(5):
+    for _ in range(3):
         wait=GAP[0]-(time.time()-_last[0])
         if wait>0:time.sleep(wait)
         _last[0]=time.time();url,hdr=_url(path,q)
         try:j,h=get(url,hdr);break
         except Exception as e:
             if '429' in str(e):
-                HIT429[0]=True;GAP[0]=min(GAP[0]*1.8,45);log(f'429 (muchas peticiones); subo la espera a {GAP[0]:.0f}s y reintento {path}')
+                HIT429[0]=True;GAP[0]=min(GAP[0]*1.8,30);log(f'429 (muchas peticiones); subo la espera a {GAP[0]:.0f}s y reintento {path}')
                 continue
             AF['err']=f'{type(e).__name__} {str(e)[:130]}';AF['fail']=AF.get('fail',0)+1
             if AF['fail']>=4:AF['ok']=False;AF['err']+=' (4 fallos seguidos: probable bloqueo, se detiene por hoy)'
@@ -295,14 +295,17 @@ def main():
     stale=not hist.get('ts') or(NOW-pdt(hist['ts'])).total_seconds()>20*3600
     errs=[]
     if stale:
-        newHL={};ok_n=0
-        for lid in LEAGUES:
+        newHL={};ok_n=0;tot=len(LEAGUES)
+        for i,lid in enumerate(LEAGUES,1):
             evs,err=discover(lid);errs+=err
             if evs is not None:
                 ok_n+=1;newHL[lid]=acc(evs)
                 for fx in evs:M[fx['fid']]={**fx,'lg':LEAGUES[lid][0],'rg':LEAGUES[lid][1],'lg_id':lid}
-            if not AF['ok']:break
-        log('Descubrimiento:',ok_n,'/',len(LEAGUES),'competiciones con datos')
+                log(f'[{i}/{tot}] {LEAGUES[lid][0]}: ok ({len(evs)} partidos)')
+            else:
+                log(f'[{i}/{tot}] {LEAGUES[lid][0]}: sin datos')
+            if not AF['ok']:log('Se detiene antes de terminar (ver motivo abajo).');break
+        log('Descubrimiento:',ok_n,'/',tot,'competiciones con datos')
         if newHL:hist={'ts':NOW.isoformat(timespec='minutes'),'L':newHL};wr('hist.json',hist);HL=newHL
     if errs:log('Ejemplo de error (descubrimiento):',' | '.join(errs[:5]))
     live,lerr=live_poll()
