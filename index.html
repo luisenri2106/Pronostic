@@ -178,6 +178,7 @@ const $=s=>document.querySelector(s),$$=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const od=o=>o.toFixed(2),pc=p=>Math.round(p*100),st5=n=>'★'.repeat(n)+'☆'.repeat(5-n);
 const cr=n=>{let h=0;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i))%360;const l=n.replace(/\b(FC|CF|SC|CD)\b/ig,'').trim().split(' ');const t=l.length>1?l[0][0]+l[1][0]:l[0].substring(0,2);return `<div class="cr" style="background:hsl(${h} 65% 45%)">${esc(t.toUpperCase())}</div>`};
+const logo=(u,n)=>u?`<img src="${u}" alt="${esc(n)}" onerror="this.outerHTML=cr('${esc(n).replace(/'/g,'\\\'')}')" style="width:32px;height:32px;object-fit:contain;">`:cr(n);
 const dk=d=>d.toLocaleDateString('en-CA'),tm=d=>d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',hour12:false});
 const RG={AM:'🌎 América',EU:'🇪🇺 Europa',AS:'🌏 Asia',OC:'🌊 Oceanía',IN:'🏆 Selecciones y copas internacionales'};
 
@@ -304,9 +305,9 @@ function renderMatches(){
         return `<div class="mc" onclick="openModal('${m.id}')">
             <div class="mh"><span>${esc(m.lg)}${m.v?' · '+esc(m.v):''}</span><span>${stat(m)}</span></div>
             <div class="tm">
-                <div class="tw">${cr(m.h)} ${esc(m.h)}</div>
+                <div class="tw">${logo(m.hl, m.h)} ${esc(m.h)}</div>
                 <div class="vs">${fin?m.hg+' - '+m.ag:'VS'}</div>
-                <div class="tw">${cr(m.a)} ${esc(m.a)}</div>
+                <div class="tw">${logo(m.al, m.a)} ${esc(m.a)}</div>
             </div>
             ${m.st!=='post' && pk ? `<div class="pk-row">
                 <div class="prob-badge">${pc(pk[1])}%</div>
@@ -359,9 +360,33 @@ function openModal(id){
     a+=`<br><br>`+(m.cx||[]).map(esc).join('<br>')+`<br><br><small style="color:var(--mu)">Estimaciones estadísticas, no garantías. Cuota justa = 1 ÷ probabilidad. Juega con responsabilidad (+18).</small>`;
     
     $('#md-title').textContent=`${m.h} vs ${m.a}`;
+
+    // Filtrar para dejar solo la opción más favorable (mayor probabilidad) por grupo y equipo/mercado
+    const bestMarkets = [];
+    const groups = new Map();
+    
+    m.k.forEach(x => {
+        // Crear una clave única: agrupa por categoría (Ej: "Goles"), 
+        // y si es específico de un equipo (Ej: "Tiros al arco:"), lo separa por equipo.
+        let groupKey = x.g;
+        if(x.n.includes(':')) {
+            groupKey += ' - ' + x.n.split(':')[0].trim();
+        } else if (x.g.includes('Hándicap')) {
+            groupKey += ' - ' + x.n.split(' ')[0].trim();
+        }
+        
+        if(!groups.has(groupKey)) groups.set(groupKey, []);
+        groups.get(groupKey).push(x);
+    });
+
+    groups.forEach(items => {
+        items.sort((a,b) => b.p - a.p); // Ordenar por probabilidad descendente
+        bestMarkets.push(items[0]); // Seleccionar SOLO el pronóstico más seguro de ese subgrupo
+    });
+
     $('#md-body').innerHTML=`<div class="analysis-box"><h4>🤖 Análisis del pronóstico</h4>${a}</div>`+
     ['low','med','high'].map(t=>{
-        const it=m.k.filter(q=>tr(q.p)===t);
+        const it=bestMarkets.filter(q=>tr(q.p)===t);
         return it.length?`<div class="risk-sec"><div class="risk-title ${t}">• ${T[t]}</div><div class="odds-grid">${it.map(q=>chip(m,q)).join('')}</div></div>`:''
     }).join('');
     
