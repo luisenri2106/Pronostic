@@ -40,20 +40,28 @@ LGAVG={'sh':12.5,'sot':4.3,'co':5.0}  # promedios de liga (estimación) para rem
 # ---------- API-Football ----------
 # Hay dos canales según dónde se sacó la clave: directo en api-football.com (header x-apisports-key)
 # o a través de RapidAPI (otra URL, header x-rapidapi-key + x-rapidapi-host). Se detecta solo con el primer intento.
-_last=[0.0];CHANNEL=['direct']
+_last=[0.0];CHANNEL=['direct'];GAP=[8.0];HIT429=[False]
+def _url(path,q):
+    if CHANNEL[0]=='direct':return 'https://v3.football.api-sports.io/'+path+'?'+P.urlencode(q),{'x-apisports-key':KEY}
+    return 'https://api-football-v1.p.rapidapi.com/v3/'+path+'?'+P.urlencode(q),{'x-rapidapi-key':KEY,'x-rapidapi-host':'v3.football.api-sports.io'}
 def af(path,**q):
     if not AF['ok']:return None
-    wait=6.5-(time.time()-_last[0])
-    if wait>0:time.sleep(wait)
-    _last[0]=time.time()
-    if CHANNEL[0]=='direct':
-        url='https://v3.football.api-sports.io/'+path+'?'+P.urlencode(q);hdr={'x-apisports-key':KEY}
+    j=h=None
+    for _ in range(5):
+        wait=GAP[0]-(time.time()-_last[0])
+        if wait>0:time.sleep(wait)
+        _last[0]=time.time();url,hdr=_url(path,q)
+        try:j,h=get(url,hdr);break
+        except Exception as e:
+            if '429' in str(e):
+                HIT429[0]=True;GAP[0]=min(GAP[0]*1.8,45);log(f'429 (muchas peticiones); subo la espera a {GAP[0]:.0f}s y reintento {path}')
+                continue
+            AF['err']=f'{type(e).__name__} {str(e)[:130]}';AF['fail']=AF.get('fail',0)+1
+            if AF['fail']>=4:AF['ok']=False;AF['err']+=' (4 fallos seguidos: probable bloqueo, se detiene por hoy)'
+            return None
     else:
-        url='https://api-football-v1.p.rapidapi.com/v3/'+path+'?'+P.urlencode(q);hdr={'x-rapidapi-key':KEY,'x-rapidapi-host':'v3.football.api-sports.io'}
-    try:j,h=get(url,hdr)
-    except Exception as e:
-        AF['err']=f'{type(e).__name__} {str(e)[:130]}';AF['fail']=AF.get('fail',0)+1
-        if AF['fail']>=4:AF['ok']=False;AF['err']+=' (4 fallos seguidos: probable bloqueo, se detiene por hoy)'
+        AF['err']='429 persistente tras varios reintentos';AF['fail']=AF.get('fail',0)+1
+        if AF['fail']>=4:AF['ok']=False
         return None
     AF['fail']=0
     if isinstance(j,dict) and isinstance(j.get('errors'),dict) and 'token' in j['errors'] and CHANNEL[0]=='direct':
@@ -275,7 +283,7 @@ def maybe_enrich(cand,M,st):
 
 def main():
     st=rd('state.json',{});[st.setdefault(k,{}) for k in('enr','pl')]
-    CHANNEL[0]=st.get('channel','direct')
+    CHANNEL[0]=st.get('channel','direct');GAP[0]=st.get('gap',8.0)
     hist=rd('hist.json',{});HL=hist.get('L',{})
     M={}
     for e in (rd('data.json',{}) or{}).get('matches',[]):
@@ -332,7 +340,8 @@ def main():
         out.append(e)
     st['pl']={k:v for k,v in st['pl'].items() if k.endswith(str(TODAY))}
     st['enr']={k:v for k,v in st['enr'].items() if int(k) in M}
-    st['channel']=CHANNEL[0]
+    if not HIT429[0]:GAP[0]=max(8.0,GAP[0]*0.85)
+    st['channel']=CHANNEL[0];st['gap']=GAP[0]
     wr('state.json',st)
     wr('data.json',{'updated':NOW.isoformat(timespec='minutes'),'meta':{'competiciones':len(LEAGUES),'con_datos':len(HL),'af':{'ok':AF['ok'],'err':AF['err'],'rem':AF['rem'],'n':AF['n']},'log':LOG[-12:]},'picks':[f'af_{i}' for i in picks],'matches':out})
     log('Listo:',len(out),'partidos,',len(picks),'picks')
